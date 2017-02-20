@@ -1,6 +1,0 @@
-<launch>
-  <include file="$(find pozyx_ros_driver)/launch/main.launch"/>
-  <node output="screen" pkg="tf2_ros" type="static_transform_publisher" name="map2world" args="5.367 4.67 0 1.5708 0 0 map World" />
-  <node pkg="tf2_ros" type="static_transform_publisher" name="utm2map" args="493696.082822 5097005.38856 0 0 0 0.805928282249 -0.592013178799 utm map" output="screen"/>
-  <node name="map_server" pkg="map_server" type="map_server" args="$(find pozyx_localization)/map/map.yaml" />
-</launch>

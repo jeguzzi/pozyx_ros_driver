@@ -1,6 +1,6 @@
 from pypozyx import POZYX_SUCCESS, POZYX_FAILURE, POZYX_TIMEOUT, SingleRegister
 import pypozyx
-from threading import Lock
+from threading import RLock
 
 
 class PozyxException(Exception):
@@ -70,9 +70,6 @@ for e, m in error_codes.items():
     ex.__name__ = name
     pozyx_exceptions[value] = ex
     vars()[name] = ex
-    print(name)
-
-# print(vars())
 
 
 def _raise_error(pozyx, remote_id, fun):
@@ -94,18 +91,20 @@ class PozyxProxy(object):
     def __init__(self, pozyx, remote_id=None):
         self.pozyx = pozyx
         self.remote_id = remote_id
-        self.lock = Lock()
+        self.lock = RLock()
 
     def __getattr__(self, attr):
         a = getattr(self.pozyx, attr)
         if callable(a):
             def f(*args, **kwargs):
-                if self.lock.acquire():
+                if self.lock.acquire(False):
                     status = a(*args, **kwargs)
                     self.lock.release()
-                if status == POZYX_FAILURE:
-                    _raise_error(self.pozyx, self.remote_id, attr)
-                if status == POZYX_TIMEOUT:
-                    raise PozyxExceptionTimeout(attr)
+                    if status == POZYX_FAILURE:
+                        _raise_error(self.pozyx, self.remote_id, attr)
+                    if status == POZYX_TIMEOUT:
+                        raise PozyxExceptionTimeout(attr)
+                    return True
+                return False
             return f
         return a
