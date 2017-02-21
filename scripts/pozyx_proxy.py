@@ -98,10 +98,14 @@ class PozyxProxy(object):
         if callable(a):
             def f(*args, **kwargs):
                 if self.lock.acquire(False):
-                    status = a(*args, **kwargs)
-                    self.lock.release()
+                    try:
+                        status = a(*args, **kwargs)
+                    except ValueError:
+                        self.lock.release()
+                        raise PozyxExceptionUnknown(attr)
                     if status == POZYX_FAILURE:
                         _raise_error(self.pozyx, self.remote_id, attr)
+                    self.lock.release()
                     if status == POZYX_TIMEOUT:
                         raise PozyxExceptionTimeout(attr)
                     return True
