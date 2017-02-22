@@ -98,9 +98,9 @@ def sensor_mode(register):
 
 class Updater(Thread):
 
-    DELAY = 0.001
+    DELAY = 0.005
 
-    def __init__(self, driver):
+    def __init__(self, driver, period):
         Thread.__init__(self)
         self.driver = driver
         self.deamon = True
@@ -111,6 +111,7 @@ class Updater(Thread):
         if driver.enable_position:
             flag = flag | bm.POZYX_INT_STATUS_POS
         self.flag = flag
+        self.period = period * 0.5
         self.start()
 
     def run(self):
@@ -132,7 +133,7 @@ class Updater(Thread):
                        interrupt.data[0] & bm.POZYX_INT_STATUS_IMU):
                         pozyx.getAllSensorData(sensor_data)
                         self.driver.publish_sensor_data(sensor_data)
-                rospy.sleep(self.DELAY)
+                rospy.sleep(self.period)
             except PozyxExceptionTimeout:
                 pass
             except PozyxException as e:
@@ -196,8 +197,11 @@ class PozyxROSDriver(object):
             anchors = [px.DeviceCoordinates(dev_id, 1, px.Coordinates(x, y, z))
                        for [dev_id, x, y, z] in anchors_data]
         self.check_visible_devices()
+        rospy.sleep(0.1)
         self.set_anchors(anchors)
+        rospy.sleep(0.1)
         self.check_config(anchors)
+        rospy.sleep(0.1)
         self.tfBuffer = tf2_ros.Buffer()
         self.tf = tf2_ros.TransformListener(self.tfBuffer)
         if self.enable_orientation:
@@ -264,8 +268,11 @@ class PozyxROSDriver(object):
                 self.pozyx.pozyx.setWrite(rg.POZYX_POS_INTERVAL, msr, self.remote_id)
                 self.pozyx.setPositionAlgorithm(self.algorithm, self.dimension)
                 rospy.sleep(0.1)
+            else:
+                msr = px.SingleRegister(0, size=2)
+                self.pozyx.pozyx.setWrite(rg.POZYX_POS_INTERVAL, msr, self.remote_id)
             if self.enable_position or self.enable_raw_sensors:
-                Updater(self)
+                Updater(self, ms * 0.001)
             #     PositionUpdater(self, ms / 1000.0)
             # if self.enable_raw_sensors:
             #     IMUUpdater(self)
@@ -295,7 +302,11 @@ class PozyxROSDriver(object):
             return True
 
     def cleanup(self):
-        self.pozyx.ser.close()
+        rospy.loginfo('Clean and close serial port')
+        ser = self.pozyx.ser
+        ser.reset_output_buffer()
+        ser.reset_input_buffer()
+        ser.close()
 
     def check_sensors_calibration(self):
         sr = px.SingleRegister()

@@ -1,7 +1,7 @@
 <launch>
   <node output="screen" pkg="pozyx_ros_driver" name="pozyx" type="pozyx.py" clear_params="true">
     <rosparam command="load" file="$(find pozyx_ros_driver)/launch/main.yaml"/>
-    <param name="rate" value='10.0'/>
+    <param name="rate" value='40.0'/>
     <param name="enable_position" value="true"/>
     <param name="enable_orientation" value="false"/>
     <param name="enable_sensors" value="false"/>
@@ -11,6 +11,6 @@
     <param name="magnetic_field_stddev" value="0.000002"/>
     <param name="orientation_stddev" value="0.001"/>
     <param name="debug" value="false"/>
-    <param name="continuous" value="false"/>
+    <param name="continuous" value="true"/>
   </node>
 </launch>

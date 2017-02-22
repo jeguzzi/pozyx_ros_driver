@@ -72,26 +72,30 @@ for e, m in error_codes.items():
     vars()[name] = ex
 
 
-def _raise_error(pozyx, remote_id, fun):
-    error_code = SingleRegister()
-    if remote_id is None:
-        pozyx.getErrorCode(error_code)
-        c = error_code.data[0]
-        raise pozyx_exceptions.get(c, PozyxExceptionUnknown)(fun)
-    status = pozyx.getErrorCode(error_code, remote_id)
-    if status == POZYX_SUCCESS:
-        c = error_code.data[0]
-        raise pozyx_exceptions.get(c, PozyxExceptionUnknown)(fun)
-    else:
-        pozyx.getErrorCode(error_code)
-        raise PozyxExceptionNoConnection(fun)
-
-
 class PozyxProxy(object):
     def __init__(self, pozyx, remote_id=None):
         self.pozyx = pozyx
         self.remote_id = remote_id
         self.lock = RLock()
+
+    def raise_error(self, fun):
+        pozyx = self.pozyx
+        remote_id = self.remote_id
+        error_code = SingleRegister()
+        if remote_id is None:
+            pozyx.getErrorCode(error_code)
+            self.lock.release()
+            c = error_code.data[0]
+            raise pozyx_exceptions.get(c, PozyxExceptionUnknown)(fun)
+        status = pozyx.getErrorCode(error_code, remote_id)
+        if status == POZYX_SUCCESS:
+            self.lock.release()
+            c = error_code.data[0]
+            raise pozyx_exceptions.get(c, PozyxExceptionUnknown)(fun)
+        else:
+            pozyx.getErrorCode(error_code)
+            self.lock.release()
+            raise PozyxExceptionNoConnection(fun)
 
     def __getattr__(self, attr):
         a = getattr(self.pozyx, attr)
@@ -104,7 +108,7 @@ class PozyxProxy(object):
                         self.lock.release()
                         raise PozyxExceptionUnknown(attr)
                     if status == POZYX_FAILURE:
-                        _raise_error(self.pozyx, self.remote_id, attr)
+                        self.raise_error(attr)
                     self.lock.release()
                     if status == POZYX_TIMEOUT:
                         raise PozyxExceptionTimeout(attr)
