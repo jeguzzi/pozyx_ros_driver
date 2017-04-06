@@ -107,6 +107,9 @@ class PozyxProxy(object):
                     except ValueError:
                         self.lock.release()
                         raise PozyxExceptionUnknown(attr)
+                    except Exception:
+                        self.lock.release()
+                        raise PozyxExceptionUnknown(attr)
                     if status == POZYX_FAILURE:
                         self.raise_error(attr)
                     self.lock.release()

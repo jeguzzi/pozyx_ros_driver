@@ -27,10 +27,10 @@ import pypozyx as px
 import rospy
 from geometry_msgs.msg import PoseStamped, Point, Quaternion, Vector3
 from geometry_msgs.msg import PoseWithCovarianceStamped
-# import tf2_ros
+import tf2_ros
 import numpy as np
-# from tf.transformations import quaternion_multiply, quaternion_inverse
-# from tf.transformations import quaternion_from_euler
+from tf.transformations import quaternion_multiply, quaternion_inverse
+from tf.transformations import quaternion_from_euler
 from sensor_msgs.msg import Imu, MagneticField
 import diagnostic_updater
 from diagnostic_msgs.msg import DiagnosticStatus
@@ -45,17 +45,21 @@ _dimensions = {'3d': px.POZYX_3D}
 g = 9.81
 
 
-# def rotate_v(v, rotation):
-#     cr = quaternion_inverse(rotation)
-#     q = v + [0]
-#     z = quaternion_multiply(q, rotation)
-#     nq = quaternion_multiply(cr, z)
-#     return nq[:3]
+def rotate_v(v, rotation):
+    cr = quaternion_inverse(rotation)
+    q = v + [0]
+    z = quaternion_multiply(q, rotation)
+    nq = quaternion_multiply(cr, z)
+    return nq[:3]
 
 
-# def rotate_q(q, rotation):
-#     nq = quaternion_multiply(q, rotation)
-#     return nq
+def rotate_q(q, rotation):
+    # cr = quaternion_inverse(rotation)
+    # z = quaternion_multiply(q, rotation)
+    # nq = quaternion_multiply(cr, z)
+    # print(q)
+    nq = quaternion_multiply(q, rotation)
+    return nq
 
 
 def cov(std_devs):
@@ -92,10 +96,6 @@ def sensor_mode(register):
     return modes[m & 0x0F]
 
 
-def log_pozyx_exception(e):
-    rospy.logerr("%s: %s", e.__class__.__name__, e.message)
-
-
 class Updater(Thread):
 
     DELAY = 0.005
@@ -111,7 +111,7 @@ class Updater(Thread):
         if driver.enable_position:
             flag = flag | bm.POZYX_INT_STATUS_POS
         self.flag = flag
-        self.period = period
+        self.period = period * 0.5
         self.start()
 
     def run(self):
@@ -122,7 +122,7 @@ class Updater(Thread):
         interrupt = px.SingleRegister()
         while not rospy.is_shutdown():
             try:
-                if pozyx.checkForFlag(self.flag, self.period, interrupt):
+                if pozyx.checkForFlag(self.flag, self.DELAY, interrupt):
                     if self.driver.enable_position and interrupt.data[0] & bm.POZYX_INT_STATUS_POS:
                         pozyx.getCoordinates(position)
                         pozyx.getPositionError(error)
@@ -133,15 +133,14 @@ class Updater(Thread):
                        interrupt.data[0] & bm.POZYX_INT_STATUS_IMU):
                         pozyx.getAllSensorData(sensor_data)
                         self.driver.publish_sensor_data(sensor_data)
-            except PozyxExceptionTimeout as e:
-                rospy.logwarn('%s: %s', e.__class__.__name__, e.message)
+                rospy.sleep(self.period)
+            except PozyxExceptionTimeout:
+                pass
             except PozyxException as e:
-                log_pozyx_exception(e)
+                rospy.logerr(e.message)
                 pozyx.ser.reset_output_buffer()
                 pozyx.ser.reset_input_buffer()
                 rospy.sleep(1)
-            finally:
-                rospy.sleep(self.period * 0.5)
 
 
 class PozyxROSDriver(object):
@@ -154,6 +153,7 @@ class PozyxROSDriver(object):
         self.remote_id = rospy.get_param('~remote_id', None)
         self.base_frame_id = rospy.get_param('~base_frame_id', 'base_link')
         debug = rospy.get_param('~debug', False)
+        self.enable_orientation = rospy.get_param('~enable_orientation', True)
         self.enable_position = rospy.get_param('~enable_position', True)
         self.enable_raw_sensors = rospy.get_param('~enable_sensors', True)
         las = rospy.get_param("~linear_acceleration_stddev", 0.0)
@@ -174,7 +174,13 @@ class PozyxROSDriver(object):
         baudrate = rospy.get_param('~baudrate', 115200)
         # height of device, required in 2.5D positioning
         self.height = rospy.get_param('~height', 0.0)  # mm
-        p = pozyx_device(baudrate=baudrate, print_output=debug)
+        p = None
+        while not p and not rospy.is_shutdown():
+            try:
+                p = px.PozyxSerial(device, baudrate=baudrate,
+                                   print_output=debug)
+            except SystemExit:
+                rospy.sleep(1)
         if not p:
             return
 
@@ -196,8 +202,22 @@ class PozyxROSDriver(object):
         rospy.sleep(0.1)
         self.check_config(anchors)
         rospy.sleep(0.1)
-        # self.tfBuffer = tf2_ros.Buffer()
-        # self.tf = tf2_ros.TransformListener(self.tfBuffer)
+        self.tfBuffer = tf2_ros.Buffer()
+        self.tf = tf2_ros.TransformListener(self.tfBuffer)
+        if self.enable_orientation:
+            try:
+                t = self.tfBuffer.lookup_transform(
+                    self.frame_id, 'utm', rospy.Time(), rospy.Duration(5.0))
+                # r = t.transform.rotation
+                # self.rotation = [r.x, r.y, r.z, r.w]
+                self.rotation = quaternion_from_euler(0, 0, 0)  # = r
+                # self.rotation = quaternion_multiply(r, self.rotation)
+                rospy.loginfo('rotation map-> pozyx %s', self.rotation)
+            except (tf2_ros.LookupException, tf2_ros.ConnectivityException,
+                    tf2_ros.ExtrapolationException):
+                    rospy.logerr('Can not tranform from utm to map frame')
+                    self.enable_orientation = False
+
         sr = px.SingleRegister()
         self.pozyx.setOperationMode(0, self.remote_id)  # work as a tag
 
@@ -234,8 +254,7 @@ class PozyxROSDriver(object):
         stamp_param = diagnostic_updater.TimeStampStatusParam()
         self.pose_pub_stat = diagnostic_updater.DiagnosedPublisher(
             self.pose_pub, updater, freq_param, stamp_param)
-        if self.enable_raw_sensors:
-            updater.add("Sensor calibration", self.update_sensor_diagnostic)
+        updater.add("Sensor calibration", self.update_sensor_diagnostic)
         updater.add("Localization", self.update_localization_diagnostic)
         rospy.on_shutdown(self.cleanup)
         continuous = rospy.get_param('~continuous', False)
@@ -254,6 +273,19 @@ class PozyxROSDriver(object):
                 self.pozyx.pozyx.setWrite(rg.POZYX_POS_INTERVAL, msr, self.remote_id)
             if self.enable_position or self.enable_raw_sensors:
                 Updater(self, ms * 0.001)
+            #     PositionUpdater(self, ms / 1000.0)
+            # if self.enable_raw_sensors:
+            #     IMUUpdater(self)
+            #     # position = px.Coordinates()
+            #     # while not rospy.is_shutdown():
+            #     #     try:
+            #     #         self.pozyx.checkForFlag(bm.POZYX_INT_STATUS_POS, 0.2)
+            #     #         self.pozyx.getCoordinates(position)
+            #     #         x = np.array([position.x, position.y, position.z])/1000.0
+            #     #         self.publish_pose(x)
+            #     #     except PozyxException as e:
+            #     #         rospy.logerr(e.message)
+            #     #         rospy.sleep(1)
             rospy.spin()
         else:
             rospy.Timer(rospy.Duration(1 / rate), self.update)
@@ -281,7 +313,7 @@ class PozyxROSDriver(object):
             sr = px.SingleRegister()
             self.pozyx.getCalibrationStatus(sr)
         except PozyxException as e:
-            log_pozyx_exception(e)
+            rospy.logerr(e.message)
             return
         v = sr.data[0]
         # print('calib {0:b} {0}'.format(v))
@@ -329,8 +361,8 @@ class PozyxROSDriver(object):
             stat.add(sensor, state)
         return stat
 
-    # def quaternion_in_map_frame(self, quaternion_in_utm_frame):
-    #     return rotate_q(quaternion_in_utm_frame, self.rotation)
+    def quaternion_in_map_frame(self, quaternion_in_utm_frame):
+        return rotate_q(quaternion_in_utm_frame, self.rotation)
 
     def update_position(self):
         position = px.Coordinates()
@@ -372,21 +404,31 @@ class PozyxROSDriver(object):
                 position = [0, 0, 0]
         except (PozyxExceptionCommQueueFull, PozyxExceptionOperationQueueFull,
                 PozyxExceptionTimeout) as e:
-            rospy.logwarn('%s: %s. Will sleep for 5 s', e.__class__.__name__, e.message)
-            rospy.sleep(1)
+            rospy.logwarn('%s: will sleep for 5 s', e.message)
+            rospy.sleep(5)
             return
         except PozyxException as e:
-            log_pozyx_exception(e)
+            rospy.logerr('%s', e.message)
+            return
+        try:
+            if self.enable_orientation:
+                # !! pozyx orientation is not absolute but relative to the orientation at start
+                q = self.update_orientation()
+                self.orientation = self.quaternion_in_map_frame(q)
+            else:
+                self.orientation = [0, 0, 0, 1]
+        except Exception as e:
+            rospy.logerr(e.__class__)
             return
         if position is not None:
-            self.publish_pose(position)
+            self.publish_pose(position, self.orientation)
 
         if self.enable_raw_sensors:
             sensor_data = px.SensorData()
             try:
                 self.pozyx.getAllSensorData(sensor_data, self.remote_id)
-            except PozyxException as e:
-                log_pozyx_exception(e)
+            except Exception as e:
+                rospy.logerr(e)
                 return
             self.publish_sensor_data(sensor_data)
 
@@ -427,8 +469,8 @@ class PozyxROSDriver(object):
             if len(anchors) > 4:
                 self.pozyx.setSelectionOfAnchors(
                     px.POZYX_ANCHOR_SEL_AUTO, len(anchors))
-        except PozyxException as e:
-            log_pozyx_exception(e)
+        except Exception as e:
+            rospy.logerr("%s", e)
 
     def check_config(self, anchors):
         list_size = px.SingleRegister()
@@ -445,8 +487,8 @@ class PozyxROSDriver(object):
                     anchor, anchor_coordinates, self.remote_id)
                 rospy.loginfo("anchor 0x%0.4x set to %s",
                               anchor, anchor_coordinates)
-        except PozyxException as e:
-            log_pozyx_exception(e)
+        except Exception as e:
+            rospy.logerr("%s", e)
 
     def check_visible_devices(self):
         try:
@@ -459,21 +501,21 @@ class PozyxROSDriver(object):
             self.pozyx.getDeviceIds(device_list)
             for d in device_list.data:
                 rospy.loginfo("Found device 0x%0.4x" % d)
-        except PozyxException as e:
-            log_pozyx_exception(e)
+        except Exception as e:
+            rospy.logerr(e)
 
     def has_updated_anchors(self, msg):
         self.frame_id = msg.header.frame_id
         anchors = [
             px.DeviceCoordinates(anchor.id, 1, px.Coordinates(
-                anchor.position.x * 1000.0, anchor.position.y * 1000.0, anchor.position.z * 1000.0))
+                anchor.position.x, anchor.position.y, anchor.position.z))
             for anchor in msg.anchors]
         self.pozyx.lock.acquire(True)
         try:
             self.set_anchors(anchors)
             self.check_config(anchors)
         except PozyxException as e:
-            log_pozyx_exception(e)
+            rospy.logerr(e.message)
         finally:
             self.pozyx.lock.release()
 
@@ -493,17 +535,6 @@ def get_device():
     if devices:
         return devices[0].device
     return None
-
-
-def pozyx_device(**kwargs):
-    p = None
-    while not p and not rospy.is_shutdown():
-        try:
-            p = px.PozyxSerial(device, **kwargs)
-        except SystemExit:
-            rospy.sleep(1)
-    if not p:
-        return
 
 
 # TODO add proper shutdown

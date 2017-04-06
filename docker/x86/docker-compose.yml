@@ -1,0 +1,7 @@
+version: '2'
+services:
+  driver:
+     build:
+        dockerfile: docker/x86/Dockerfile
+        context: ../..
+     image: jeguzzi/df:pozyx

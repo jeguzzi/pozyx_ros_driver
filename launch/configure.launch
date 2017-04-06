@@ -1,0 +1,11 @@
+<launch>
+  <node pkg="pozyx_ros_examples" type="uwb_configurator_ros.py" name="configure" output="screen">
+    <rosparam param="uwb">
+channel: 1
+bitrate: 0x02 # 6810 bit/s
+prf: 0x02 # 64 Mhz
+plen: 0x04 # 64 bits, prf=2, plen=0x04, gain_db=15.0)
+gain_db: 32.0
+    </rosparam>
+  </node>
+</launch>
