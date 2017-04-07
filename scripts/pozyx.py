@@ -497,13 +497,13 @@ def get_device():
 
 def pozyx_device(**kwargs):
     p = None
+    device = get_device()
     while not p and not rospy.is_shutdown():
         try:
             p = px.PozyxSerial(device, **kwargs)
         except SystemExit:
             rospy.sleep(1)
-    if not p:
-        return
+    return p
 
 
 # TODO add proper shutdown

@@ -1,5 +1,5 @@
 <launch>
-  <node pkg="pozyx_ros_examples" type="uwb_configurator_ros.py" name="configure" output="screen">
+  <node pkg="pozyx_ros_driver" type="uwb_configurator_ros.py" name="configure" output="screen">
     <rosparam param="uwb">
 channel: 1
 bitrate: 0x02 # 6810 bit/s

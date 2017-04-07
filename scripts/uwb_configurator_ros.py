@@ -31,6 +31,9 @@ def set_uwb_settings(**kwargs):
         for bitrate in pypozyx.POZYX_ALL_BITRATES:
             for prf in pypozyx.POZYX_ALL_PRFS:
                 for plen in pypozyx.POZYX_ALL_PLENS:
+                    rospy.loginfo("Looking for devices on channel %d, bitrate 0x%x, "
+                                  "prf 0x%x, plen 0x%x",
+                                  channel, bitrate, prf, plen)
                     uwb_settings = pypozyx.UWBSettings(
                         channel, bitrate, prf, plen, gain_db)
                     pozyx.clearDevices()
@@ -42,13 +45,17 @@ def set_uwb_settings(**kwargs):
                         device_list = pypozyx.DeviceList(
                             list_size=device_list_size[0])
                         pozyx.getDeviceIds(device_list)
+                        rospy.loginfo("Found devices %s", device_list)
                         for device in device_list:
                             if device not in devices_met:
                                 pozyx.setUWBSettings(new_uwb_settings, device)
                                 pozyx.saveRegisters(uwb_registers, device)
-                                rospy.loginfo(
-                                    'Device with ID 0x%0.4x is set' % device)
+                                rospy.loginfo('Device with ID 0x%0.4x set', device)
                                 devices_met.append(device)
+                    else:
+                        pass
+                        # rospy.loginfo("Found no device")
+    rospy.loginfo("Scanning end: devices %s were configured", ["0x%x" % d for d in devices_met])
     pozyx.setUWBSettings(new_uwb_settings)
     pozyx.saveRegisters(uwb_registers)
     rospy.loginfo("Local device set! Shutting down configurator node now...")
