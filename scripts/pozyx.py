@@ -152,6 +152,8 @@ class PozyxROSDriver(object):
         self.ps = deque(maxlen=20)
         self.es = deque(maxlen=20)
         self.remote_id = rospy.get_param('~remote_id', None)
+        if self.remote_id:
+            self.remote_id = int(self.remote_id, 0)
         self.base_frame_id = rospy.get_param('~base_frame_id', 'base_link')
         debug = rospy.get_param('~debug', False)
         self.enable_position = rospy.get_param('~enable_position', True)
@@ -179,6 +181,9 @@ class PozyxROSDriver(object):
             return
 
         self.pozyx = PozyxProxy(p, self.remote_id)
+
+        rospy.loginfo('Device %s initialized with remote id 0x%04x', device, self.remote_id)
+
         self.pose_pub = rospy.Publisher('pose', PoseStamped, queue_size=1)
         self.pose_cov_pub = rospy.Publisher(
             'pose_cov', PoseWithCovarianceStamped, queue_size=1)
@@ -199,48 +204,52 @@ class PozyxROSDriver(object):
         # self.tfBuffer = tf2_ros.Buffer()
         # self.tf = tf2_ros.TransformListener(self.tfBuffer)
         sr = px.SingleRegister()
-        self.pozyx.setOperationMode(0, self.remote_id)  # work as a tag
+        try:
+            self.pozyx.setOperationMode(0, self.remote_id)  # work as a tag
+            self.pozyx.getWhoAmI(sr, self.remote_id)
+            _id = '0x%.2x' % sr.data[0]
+            rospy.set_param('~id', _id)
+            updater.setHardwareID('Pozyx %s' % _id)
+            self.pozyx.getFirmwareVersion(sr, self.remote_id)
+            rospy.set_param('~firmware', register2version(sr))
+            self.pozyx.getHardwareVersion(sr, self.remote_id)
+            rospy.set_param('~hardware', register2version(sr))
+            ni = px.NetworkID()
+            self.pozyx.getNetworkId(ni)
+            rospy.set_param('~uwb/network_id', str(ni))
 
-        self.pozyx.getWhoAmI(sr, self.remote_id)
-        _id = '0x%.2x' % sr.data[0]
-        rospy.set_param('~id', _id)
-        updater.setHardwareID('Pozyx %s' % _id)
-        self.pozyx.getFirmwareVersion(sr, self.remote_id)
-        rospy.set_param('~firmware', register2version(sr))
-        self.pozyx.getHardwareVersion(sr, self.remote_id)
-        rospy.set_param('~hardware', register2version(sr))
-        ni = px.NetworkID()
-        self.pozyx.getNetworkId(ni)
-        rospy.set_param('~uwb/network_id', str(ni))
-
-        s = px.UWBSettings()
-        self.pozyx.getUWBSettings(s, self.remote_id)
-        rospy.set_param('~uwb/channel', s.channel)
-        rospy.set_param('~uwb/bitrate', s.parse_bitrate())
-        rospy.set_param('~uwb/prf', s.parse_prf())
-        rospy.set_param('~uwb/plen', s.parse_plen())
-        rospy.set_param('~uwb/gain', s.gain_db)
-        self.pozyx.getOperationMode(sr, self.remote_id)
-        rospy.set_param('~uwb/mode', 'anchor' if (sr.data[0] & 1) == 1 else 'tag')
-        self.pozyx.getSensorMode(sr, self.remote_id)
-        rospy.set_param('~sensor_mode', sensor_mode(sr))
-        self_test = self.check_self_test()
-        if not all(self_test.values()):
-            rospy.logwarn('Failed Self Test %s', self_test)
-        else:
-            rospy.loginfo('Passed Self Test %s', self_test)
-        freq_bounds = {'min': rate * 0.8, 'max': rate * 1.2}
-        freq_param = diagnostic_updater.FrequencyStatusParam(freq_bounds, 0.1, 10)
-        stamp_param = diagnostic_updater.TimeStampStatusParam()
-        self.pose_pub_stat = diagnostic_updater.DiagnosedPublisher(
-            self.pose_pub, updater, freq_param, stamp_param)
-        if self.enable_raw_sensors:
-            updater.add("Sensor calibration", self.update_sensor_diagnostic)
-        updater.add("Localization", self.update_localization_diagnostic)
-        rospy.on_shutdown(self.cleanup)
-        continuous = rospy.get_param('~continuous', False)
-        rospy.Timer(rospy.Duration(1), lambda evt: updater.update())
-        rospy.Subscriber('set_anchors', Anchors, self.has_updated_anchors)
+            s = px.UWBSettings()
+            self.pozyx.getUWBSettings(s, self.remote_id)
+            rospy.set_param('~uwb/channel', s.channel)
+            rospy.set_param('~uwb/bitrate', s.parse_bitrate())
+            rospy.set_param('~uwb/prf', s.parse_prf())
+            rospy.set_param('~uwb/plen', s.parse_plen())
+            rospy.set_param('~uwb/gain', s.gain_db)
+            self.pozyx.getOperationMode(sr, self.remote_id)
+            rospy.set_param('~uwb/mode', 'anchor' if (sr.data[0] & 1) == 1 else 'tag')
+            self.pozyx.getSensorMode(sr, self.remote_id)
+            rospy.set_param('~sensor_mode', sensor_mode(sr))
+            self_test = self.check_self_test()
+            if not all(self_test.values()):
+                rospy.logwarn('Failed Self Test %s', self_test)
+            else:
+                rospy.loginfo('Passed Self Test %s', self_test)
+            freq_bounds = {'min': rate * 0.8, 'max': rate * 1.2}
+            freq_param = diagnostic_updater.FrequencyStatusParam(freq_bounds, 0.1, 10)
+            stamp_param = diagnostic_updater.TimeStampStatusParam()
+            self.pose_pub_stat = diagnostic_updater.DiagnosedPublisher(
+                self.pose_pub, updater, freq_param, stamp_param)
+            if self.enable_raw_sensors:
+                updater.add("Sensor calibration", self.update_sensor_diagnostic)
+            updater.add("Localization", self.update_localization_diagnostic)
+            rospy.on_shutdown(self.cleanup)
+            continuous = rospy.get_param('~continuous', False)
+            rospy.Timer(rospy.Duration(1), lambda evt: updater.update())
+            rospy.Subscriber('set_anchors', Anchors, self.has_updated_anchors)
+        except PozyxException as e:
+            rospy.logerr('Initialization failed')
+            log_pozyx_exception(e)
+            return
         if continuous:
             if self.enable_position:
                 ms = int(1000.0 / rate)
