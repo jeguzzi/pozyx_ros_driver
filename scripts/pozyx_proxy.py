@@ -7,7 +7,7 @@ class PozyxException(Exception):
     pass
 
 
-class PozyxExceptionUnknown(Exception):
+class PozyxExceptionUnknown(PozyxException):
     def __init__(self, fun):
         self.message = 'Unknown error in %s' % fun
 
