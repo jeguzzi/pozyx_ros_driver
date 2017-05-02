@@ -27,8 +27,10 @@ import pypozyx as px
 import rospy
 from geometry_msgs.msg import PoseStamped, Point, Quaternion, Vector3
 from geometry_msgs.msg import PoseWithCovarianceStamped
+from std_msgs.msg import Float32
 # import tf2_ros
 import numpy as np
+import math
 # from tf.transformations import quaternion_multiply, quaternion_inverse
 # from tf.transformations import quaternion_from_euler
 from sensor_msgs.msg import Imu, MagneticField
@@ -128,7 +130,7 @@ class Updater(Thread):
                         pozyx.getPositionError(error)
                         if self.driver.accept_position(position, error):
                             x = np.array([position.x, position.y, position.z]) / 1000.0
-                            self.driver.publish_pose(x)
+                            self.driver.publish_pose(x, error)
                     if (self.driver.enable_raw_sensors and
                        interrupt.data[0] & bm.POZYX_INT_STATUS_IMU):
                         pozyx.getAllSensorData(sensor_data)
@@ -183,7 +185,7 @@ class PozyxROSDriver(object):
         self.pozyx = PozyxProxy(p, self.remote_id)
 
         rospy.loginfo('Device %s initialized with remote id 0x%04x', device, self.remote_id)
-
+        self.error_pub = rospy.Publisher('error', Float32, queue_size=1)
         self.pose_pub = rospy.Publisher('pose', PoseStamped, queue_size=1)
         self.pose_cov_pub = rospy.Publisher(
             'pose_cov', PoseWithCovarianceStamped, queue_size=1)
@@ -358,7 +360,7 @@ class PozyxROSDriver(object):
         self.pozyx.getQuaternion(quat)
         return [quat.x, quat.y, quat.z, quat.w]
 
-    def publish_pose(self, position=[0, 0, 0], orientation=[0, 0, 0, 1]):
+    def publish_pose(self, position=[0, 0, 0], orientation=[0, 0, 0, 1], error=None):
         msg = PoseStamped()
         msg.header.frame_id = self.frame_id
         msg.header.stamp = rospy.Time.now()
@@ -373,12 +375,17 @@ class PozyxROSDriver(object):
         pmsg.pose.covariance = self.pose_cov
         self.pose_cov_pub.publish(pmsg)
 
+        if error is not None:
+            e = math.sqrt(error.x ** 2 + error.y ** 2)
+            self.error_pub(e / 1000.0)
+
     def update(self, event):
         try:
             if self.enable_position:
                 position, error = self.update_position()
             else:
                 position = [0, 0, 0]
+                error = None
         except (PozyxExceptionCommQueueFull, PozyxExceptionOperationQueueFull,
                 PozyxExceptionTimeout) as e:
             rospy.logwarn('%s: %s. Will sleep for 5 s', e.__class__.__name__, e.message)
@@ -388,7 +395,7 @@ class PozyxROSDriver(object):
             log_pozyx_exception(e)
             return
         if position is not None:
-            self.publish_pose(position)
+            self.publish_pose(position, error)
 
         if self.enable_raw_sensors:
             sensor_data = px.SensorData()
