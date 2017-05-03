@@ -130,7 +130,7 @@ class Updater(Thread):
                         pozyx.getPositionError(error)
                         if self.driver.accept_position(position, error):
                             x = np.array([position.x, position.y, position.z]) / 1000.0
-                            self.driver.publish_pose(x, error)
+                            self.driver.publish_pose(x, error=error)
                     if (self.driver.enable_raw_sensors and
                        interrupt.data[0] & bm.POZYX_INT_STATUS_IMU):
                         pozyx.getAllSensorData(sensor_data)
@@ -377,7 +377,7 @@ class PozyxROSDriver(object):
 
         if error is not None:
             e = math.sqrt(error.x ** 2 + error.y ** 2)
-            self.error_pub(e / 1000.0)
+            self.error_pub.publish(e / 1000.0)
 
     def update(self, event):
         try:
@@ -395,7 +395,7 @@ class PozyxROSDriver(object):
             log_pozyx_exception(e)
             return
         if position is not None:
-            self.publish_pose(position, error)
+            self.publish_pose(position, error=error)
 
         if self.enable_raw_sensors:
             sensor_data = px.SensorData()
