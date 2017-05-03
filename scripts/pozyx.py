@@ -98,6 +98,11 @@ def log_pozyx_exception(e):
     rospy.logerr("%s: %s", e.__class__.__name__, e.message)
 
 
+def h_error(error_mm):
+    e = math.sqrt(error_mm.x ** 2 + error_mm.y ** 2)
+    return e / 1000.0
+
+
 class Updater(Thread):
 
     DELAY = 0.005
@@ -160,6 +165,7 @@ class PozyxROSDriver(object):
         debug = rospy.get_param('~debug', False)
         self.enable_position = rospy.get_param('~enable_position', True)
         self.enable_raw_sensors = rospy.get_param('~enable_sensors', True)
+        self.max_error = rospy.get_param("~max_error", 10.0)
         las = rospy.get_param("~linear_acceleration_stddev", 0.0)
         avs = rospy.get_param("~angular_velocity_stddev", 0.0)
         mfs = rospy.get_param("~magnetic_field_stddev", 0.0)
@@ -183,8 +189,10 @@ class PozyxROSDriver(object):
             return
 
         self.pozyx = PozyxProxy(p, self.remote_id)
-
-        rospy.loginfo('Device %s initialized with remote id 0x%04x', device, self.remote_id)
+        if self.remote_id:
+            rospy.loginfo('Device %s initialized with remote id 0x%04x', device, self.remote_id)
+        else:
+            rospy.loginfo('Device %s initialized', device)
         self.error_pub = rospy.Publisher('error', Float32, queue_size=1)
         self.pose_pub = rospy.Publisher('pose', PoseStamped, queue_size=1)
         self.pose_cov_pub = rospy.Publisher(
@@ -207,7 +215,8 @@ class PozyxROSDriver(object):
         # self.tf = tf2_ros.TransformListener(self.tfBuffer)
         sr = px.SingleRegister()
         try:
-            self.pozyx.setOperationMode(0, self.remote_id)  # work as a tag
+            # Changed: Not available in firware 1.1 (at least in the corresp. python lib)
+            # self.pozyx.setOperationMode(0, self.remote_id)  # work as a tag
             self.pozyx.getWhoAmI(sr, self.remote_id)
             _id = '0x%.2x' % sr.data[0]
             rospy.set_param('~id', _id)
@@ -271,8 +280,9 @@ class PozyxROSDriver(object):
             rospy.spin()
 
     def accept_position(self, pos_mm, error_mm):
-        self.es.append(abs(error_mm.y))
-        if abs(error_mm.y) > 1000000 or error_mm.x != 0:
+        e = h_error(error_mm)
+        self.es.append(e)
+        if abs(error_mm.y) > 1000000 or error_mm.x != 0 or e > self.max_error:
             rospy.logwarn('Faulty measurement %s %s', pos_mm, error_mm)
             self.ps.append(0)
             return False
@@ -376,8 +386,8 @@ class PozyxROSDriver(object):
         self.pose_cov_pub.publish(pmsg)
 
         if error is not None:
-            e = math.sqrt(error.x ** 2 + error.y ** 2)
-            self.error_pub.publish(e / 1000.0)
+            e = h_error(error)
+            self.error_pub.publish(e)
 
     def update(self, event):
         try:
