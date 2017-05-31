@@ -27,7 +27,7 @@ import pypozyx as px
 import rospy
 from geometry_msgs.msg import PoseStamped, Point, Quaternion, Vector3
 from geometry_msgs.msg import PoseWithCovarianceStamped
-from std_msgs.msg import Float32
+from std_msgs.msg import Float32, Empty
 # import tf2_ros
 import numpy as np
 import math
@@ -156,11 +156,15 @@ class Updater(Thread):
 class PozyxROSDriver(object):
 
     def reset_or_exit(self):
+        self.ready = False
         if not self.reset():
             rospy.logerr('Failed to reset, will exit')
             rospy.signal_shutdown("User exited MORSE simulation")
+        self.ready = True
 
     def reset(self, max_trials=0):
+        self.pozyx.lock.acquire(True)
+        # No need to release because we will create a new pozyx object
         self.reset_count += 1
         rospy.logwarn('Resetting pozyx')
         try:
@@ -168,9 +172,17 @@ class PozyxROSDriver(object):
         except PozyxException as e:
             log_pozyx_exception(e)
             return False
-            # rospy.logerr('Failed to reset, will exit')
-            # rospy.signal_shutdown("User exited MORSE simulation")
-        self.sleep(2)
+        ser = self.pozyx.ser
+        ser.close()
+        rospy.sleep(3.0)
+        p = pozyx_device(baudrate=self.baudrate, print_output=self.debug)
+        if not p:
+            rospy.logerr('Could not initialize a device')
+            return False
+        self.pozyx = PozyxProxy(p, self.remote_id)
+        # rospy.logerr('Failed to reset, will exit')
+        # rospy.signal_shutdown("User exited MORSE simulation")
+        rospy.sleep(0.1)
         return self.robust_init_pozyx(max_trials=max_trials)
 
     def init_diagnostics(self):
@@ -187,6 +199,13 @@ class PozyxROSDriver(object):
         updater.add("Localization", self.update_localization_diagnostic)
         updater.add("Resets", self.update_reset_diagnostic)
         rospy.Timer(rospy.Duration(1), lambda evt: updater.update())
+
+    def self_test(self):
+        self_test = self.check_self_test()
+        if not all(self_test.values()):
+            rospy.logwarn('Failed Self Test %s', self_test)
+        else:
+            rospy.loginfo('Passed Self Test %s', self_test)
 
     def expose_pozyx_config(self):
         sr = px.SingleRegister()
@@ -213,11 +232,7 @@ class PozyxROSDriver(object):
         rospy.set_param('~uwb/mode', 'anchor' if (sr.data[0] & 1) == 1 else 'tag')
         self.pozyx.getSensorMode(sr, self.remote_id)
         rospy.set_param('~sensor_mode', sensor_mode(sr))
-        self_test = self.check_self_test()
-        if not all(self_test.values()):
-            rospy.logwarn('Failed Self Test %s', self_test)
-        else:
-            rospy.loginfo('Passed Self Test %s', self_test)
+        self.self_test()
 
     def init_pozyx(self):
 
@@ -262,6 +277,7 @@ class PozyxROSDriver(object):
 
     def __init__(self, device):
         rospy.init_node('pozyx_driver', anonymous=True)
+        self.ready = False
         self.max_faulty = 5
         self.reset_count = 0
         self.ps = deque(maxlen=20)
@@ -270,7 +286,7 @@ class PozyxROSDriver(object):
         if self.remote_id:
             self.remote_id = int(self.remote_id, 0)
         self.base_frame_id = rospy.get_param('~base_frame_id', 'base_link')
-        debug = rospy.get_param('~debug', False)
+        self.debug = rospy.get_param('~debug', False)
         self.enable_position = rospy.get_param('~enable_position', True)
         self.enable_raw_sensors = rospy.get_param('~enable_sensors', True)
         self.max_error = rospy.get_param("~max_error", 10.0)
@@ -289,10 +305,10 @@ class PozyxROSDriver(object):
         self.rate = rospy.get_param('~rate', 1.0)  # Hz
         self.algorithm = _algorithms.get(_a, px.POZYX_POS_ALG_UWB_ONLY)
         self.dimension = _dimensions.get(_d, px.POZYX_3D)
-        baudrate = rospy.get_param('~baudrate', 115200)
+        self.baudrate = rospy.get_param('~baudrate', 115200)
         # height of device, required in 2.5D positioning
         self.height = rospy.get_param('~height', 0.0)  # mm
-        p = pozyx_device(baudrate=baudrate, print_output=debug)
+        p = pozyx_device(baudrate=self.baudrate, print_output=self.debug)
         if not p:
             rospy.logerr('Could not initialize a device')
             return
@@ -315,13 +331,15 @@ class PozyxROSDriver(object):
 
         rospy.on_shutdown(self.cleanup)
         continuous = rospy.get_param('~continuous', False)
-
+        self.pozyx.lock.acquire(True)
         if not self.robust_init_pozyx(max_trials=1):
             rospy.logerr('Failed to initialize pozyx')
             return
-
+        self.pozyx.lock.release()
+        self.ready = True
         self.init_diagnostics()
         rospy.Subscriber('set_anchors', Anchors, self.has_updated_anchors)
+        rospy.Subscriber('reset', Empty, self.has_received_reset_msg)
         if continuous:
             if self.enable_position or self.enable_raw_sensors:
                 ms = int(1000.0 / self.rate)
@@ -331,8 +349,12 @@ class PozyxROSDriver(object):
             rospy.Timer(rospy.Duration(1 / self.rate), self.update)
             rospy.spin()
 
-    def accept_position(self, pos_mm, error_mm):
+    def has_received_reset_msg(self, msg):
+        rospy.loginfo('Resetting')
+        self.reset_or_exit()
+        rospy.loginfo('Reset')
 
+    def accept_position(self, pos_mm, error_mm):
         if(error_mm.x == error_mm.x == error_mm.z == 1 and
            error_mm.xy == error_mm.yz == error_mm.xz == 0):
             rospy.logwarn('Faulty measurement %s %s', pos_mm, error_mm)
@@ -357,10 +379,10 @@ class PozyxROSDriver(object):
     def cleanup(self):
         rospy.loginfo('Clean and close serial port')
         self.pozyx.resetSystem()
-        # ser = self.pozyx.ser
+        ser = self.pozyx.ser
         # ser.reset_output_buffer()
         # ser.reset_input_buffer()
-        # ser.close()
+        ser.close()
 
     def check_sensors_calibration(self):
         try:
@@ -415,6 +437,8 @@ class PozyxROSDriver(object):
         return stat
 
     def update_sensor_diagnostic(self, stat):
+        if not self.ready:
+            return
         self.pozyx.lock.acquire(True)
         rs = self.check_sensors_calibration()
         self.pozyx.lock.release()
@@ -467,6 +491,8 @@ class PozyxROSDriver(object):
             self.error_pub.publish(e)
 
     def update(self, event):
+        if not self.ready:
+            return
         try:
             if self.enable_position:
                 position, error = self.update_position()
@@ -559,6 +585,8 @@ class PozyxROSDriver(object):
             rospy.logwarn("No visible device")
 
     def has_updated_anchors(self, msg):
+        if not self.ready:
+            return
         self.frame_id = msg.header.frame_id
         anchors = [
             px.DeviceCoordinates(anchor.id, 1, px.Coordinates(
@@ -596,6 +624,13 @@ def get_device():
 def pozyx_device(**kwargs):
     p = None
     device = get_device()
+    while True:
+        device = get_device()
+        if device:
+            break
+        else:
+            rospy.sleep(1)
+    rospy.loginfo('Found device %s', device)
     while not p and not rospy.is_shutdown():
         try:
             p = px.PozyxSerial(device, **kwargs)
