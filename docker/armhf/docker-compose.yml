@@ -1,6 +1,6 @@
 version: '2'
 services:
-  mavros:
+  pozyx:
      build:
         dockerfile: docker/armhf/Dockerfile
         context: ../..

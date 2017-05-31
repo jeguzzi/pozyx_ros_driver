@@ -5,7 +5,8 @@
   <arg name="enable_sensors" default="false"/>
   <arg name="rate" default="5.0"/>
   <arg name="debug" default="false"/>
-  <node output="screen" pkg="pozyx_ros_driver" name="pozyx" type="pozyx.py" clear_params="true" required="true">
+  <arg name="max_error" default="10.0"/>
+  <node output="screen" pkg="pozyx_ros_driver" name="pozyx" type="pozyx_node.py" clear_params="true" required="true">
     <rosparam command="load" file="$(find pozyx_ros_driver)/launch/main.yaml"/>
     <param name="rate" value="$(arg rate)"/>
     <param name="enable_position" value="$(arg enable_position)"/>
@@ -17,6 +18,8 @@
     <param name="orientation_stddev" value="0.001"/>
     <param name="debug" value="$(arg debug)"/>
     <param name="continuous" value="$(arg continuous)"/>
+    <param name="max_error" value="$(arg max_error)"/>
+    <param name="gain_db" value="32.0"/>
     <remap from="pose" to="$(arg pose)"/>
   </node>
 </launch>

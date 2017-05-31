@@ -11,31 +11,19 @@ starting the other nodes is valid.
 PS: Don't forget the anchor configuration.
 """
 
-import pypozyx
+
 import rospy
-import sys
-from pozyx import pozyx_device
-
-
-def set_gain(gain):
-    rospy.loginfo("Setting all encountered devices with gain: %f" % gain)
-    pozyx = pozyx_device()
-    if not pozyx:
-        rospy.logerr('No device found')
-        return
-    pozyx.doDiscovery(pypozyx.POZYX_DISCOVERY_ALL_DEVICES)
-    device_list_size = pypozyx.SingleRegister()
-    pozyx.getDeviceListSize(device_list_size)
-    if device_list_size[0] > 0:
-        device_list = pypozyx.DeviceList(list_size=device_list_size[0])
-        pozyx.getDeviceIds(device_list)
-    pozyx.setTxPower(gain)
-    for device in device_list:
-        pozyx.setTxPower(gain, remote_id=device)
-    rospy.loginfo("Gain set. Shutting down configurator node now ...")
+from pozyx_ros_driver import driver
+from pozyx_ros_driver import configure
 
 
 if __name__ == '__main__':
     rospy.init_node('set_gain')
-    gain = float(sys.argv[1])
-    set_gain(gain)
+    baudrate = rospy.get_param('~baudrate', 115200)
+    p = driver.pozyx_device(baudrate=baudrate)
+    if not p:
+        rospy.logerr('Could not initialize a device')
+        exit(1)
+    gain = rospy.get_param('~gain')
+    set_all = rospy.get_param('~config_all', False)
+    configure.set_gain(p, gain, set_all=set_all)
